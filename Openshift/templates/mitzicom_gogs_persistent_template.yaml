@@ -1,0 +1,365 @@
+kind: Template
+apiVersion: v1
+metadata:
+  annotations:
+    description: The Gogs git server (https://gogs.io/)
+    tags: ci,gogs
+  name: mitzicom-gogs-persistent
+objects:
+- kind: ServiceAccount
+  apiVersion: v1
+  metadata:
+    creationTimestamp: null
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+- kind: Service
+  apiVersion: v1
+  metadata:
+    annotations:
+      description: The Gogs server's http port
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+  spec:
+    ports:
+    - name: 3000-tcp
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}    
+- kind: Service
+  apiVersion: v1
+  metadata:
+    annotations:
+      description: Exposes the postgresql database server
+    name: ${APPLICATION_NAME}-postgresql
+    labels:
+      app: ${APPLICATION_NAME}
+  spec:
+    ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+    selector:
+      name: ${APPLICATION_NAME}-postgresql
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}      
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    annotations:
+      description: Database deployment
+    name: ${APPLICATION_NAME}-postgresql
+    labels:
+      app: ${APPLICATION_NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${APPLICATION_NAME}-postgresql
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${APPLICATION_NAME}-postgresql
+        name: ${APPLICATION_NAME}-postgresql
+      spec:
+        serviceAccountName: ${APPLICATION_NAME}
+        containers:
+        - env:
+          - name: POSTGRESQL_USER
+            value: ${DATABASE_USER}
+          - name: POSTGRESQL_PASSWORD
+            value: ${DATABASE_PASSWORD}
+          - name: POSTGRESQL_DATABASE
+            value: ${DATABASE_NAME}
+          - name: POSTGRESQL_ADMIN_PASSWORD
+            value: ${DATABASE_ADMIN_PASSWORD}
+          image: ' '
+          livenessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - pg_isready -h 127.0.0.1 -p 5432
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: postgresql
+          ports:
+          - containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - psql -h 127.0.0.1 -U ${POSTGRESQL_USER} -q -d ${POSTGRESQL_DATABASE} -c 'SELECT 1'
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 512Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File              
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: postgresql-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: postgresql-data
+          persistentVolumeClaim:
+            claimName: postgresql
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:9.5
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+  spec:
+    replicas: 1
+    selector:
+      app: ${APPLICATION_NAME}
+      deploymentconfig: ${APPLICATION_NAME}
+    strategy:
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: ${APPLICATION_NAME}
+          deploymentconfig: ${APPLICATION_NAME}
+      spec:
+        serviceAccountName: ${APPLICATION_NAME}
+        containers:
+        - image: " "
+          imagePullPolicy: Always
+          name: ${APPLICATION_NAME}
+          ports:
+          - containerPort: 3000
+            protocol: TCP
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /data
+            name: gogs-volume-1
+          - mountPath: /opt/gogs/custom/conf
+            name: config-volume
+          readinessProbe:
+              httpGet:
+                path: /
+                port: 3000
+                scheme: HTTP
+              initialDelaySeconds: 3
+              timeoutSeconds: 1
+              periodSeconds: 20
+              successThreshold: 1
+              failureThreshold: 10
+          livenessProbe:
+              httpGet:
+                path: /
+                port: 3000
+                scheme: HTTP
+              initialDelaySeconds: 20
+              timeoutSeconds: 1
+              periodSeconds: 10
+              successThreshold: 1
+              failureThreshold: 10
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: gogs-volume-1
+          persistentVolumeClaim:
+            claimName: gogs-pvc
+        - name: config-volume
+          configMap:
+            name: gogs-config
+            items:
+              - key: app.ini
+                path: app.ini
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${APPLICATION_NAME}
+        from:
+          kind: ImageStreamTag
+          name: ${APPLICATION_NAME}:${GOGS_VERSION}
+      type: ImageChange
+- kind: Route
+  apiVersion: v1
+  id: ${APPLICATION_NAME}-http
+  metadata:
+    annotations:
+      description: Route for application's http service.
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+  spec:
+    host: ${HOSTNAME}
+    port:
+      targetPort: 3000-tcp
+    to:
+      kind: Service
+      name: ${APPLICATION_NAME}
+      weight: 100
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${APPLICATION_NAME}
+    name: ${APPLICATION_NAME}
+  spec:
+    tags:
+    - name: "${GOGS_VERSION}"
+      from:
+        kind: DockerImage
+        name: docker.io/openshiftdemos/gogs:${GOGS_VERSION}
+      importPolicy: {}
+      annotations:
+        description: The Gogs git server docker image
+        tags: gogs,go,golang
+        version: "${GOGS_VERSION}"        
+- kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+    name: gogs-pvc
+    labels:
+      app: ${APPLICATION_NAME}
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${GOGS_VOLUME_CAPACITY}
+- kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+    name: postgresql
+    labels:
+      app: ${APPLICATION_NAME}
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${DB_VOLUME_CAPACITY}
+- kind: ConfigMap
+  apiVersion: v1
+  metadata:
+    name: gogs-config
+    labels:
+      app: ${APPLICATION_NAME}
+  data:
+    app.ini: |
+      RUN_MODE = prod
+      RUN_USER = gogs
+      [database]
+      DB_TYPE  = postgres
+      HOST     = ${APPLICATION_NAME}-postgresql:5432
+      NAME     = ${DATABASE_NAME}
+      USER     = ${DATABASE_USER}
+      PASSWD   = ${DATABASE_PASSWORD}
+      [repository]
+      ROOT = /opt/gogs/data/repositories
+      [server]
+      ROOT_URL=http://${HOSTNAME}
+      SSH_DOMAIN=${HOSTNAME}
+      [security]
+      INSTALL_LOCK = ${INSTALL_LOCK}
+      [service]
+      ENABLE_CAPTCHA = false
+      [webhook]
+      SKIP_TLS_VERIFY = ${SKIP_TLS_VERIFY}
+parameters:
+- description: The name for the application.
+  name: APPLICATION_NAME
+  required: true
+  value: gogs
+- description: 'Custom hostname for http service route.  Leave blank for default hostname, e.g.: <application-name>-<project>.<default-domain-suffix>'
+  name: HOSTNAME
+- description: Volume space available for data, e.g. 512Mi, 2Gi
+  name: GOGS_VOLUME_CAPACITY
+  required: true
+  value: 4Gi
+- description: Volume space available for postregs data, e.g. 512Mi, 2Gi
+  name: DB_VOLUME_CAPACITY
+  required: true
+  value: 1Gi
+- displayName: Database Username
+  from: gogs
+  value: gogs
+  name: DATABASE_USER
+- displayName: Database Password
+  from: '[a-zA-Z0-9]{8}'
+  value: gogs
+  name: DATABASE_PASSWORD
+- displayName: Database Name
+  name: DATABASE_NAME
+  value: gogs
+- displayName: Database Admin Password
+  from: '[a-zA-Z0-9]{8}'
+  generate: expression
+  name: DATABASE_ADMIN_PASSWORD
+- name: GOGS_VERSION
+  displayName: Gogs Version
+  description: 'Version of the Gogs container image to be used'
+  value: "0.9.97"
+  required: true
+- name: INSTALL_LOCK
+  displayName: Installation lock
+  description: 'If set to true, installation (/install) page will be disabled. Set to false if you want to run the installation wizard via web'
+  value: "true"
+- name: SKIP_TLS_VERIFY
+  displayName: Skip TLS verification on webhooks
+  description: Skip TLS verification on webhooks. Enable with caution!
+  value: "false"

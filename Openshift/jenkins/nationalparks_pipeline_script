@@ -1,0 +1,116 @@
+#!groovy
+
+// Run this pipeline on the custom Maven Slave ('maven-custom-slavepod')
+// Maven Slaves have JDK and Maven already installed
+// 'maven-appdev' has skopeo installed as well.
+node('maven-custom-slavepod') {
+  // Checkout Source Code
+  stage('Checkout NationParks Source(Gogs)') {
+    git credentialsId: '2b8f9c29-982e-46bb-9e15-80ab107ef284', url: 'http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git'
+    sh "ls -al"
+  }
+
+  // The following variables need to be defined at the top level
+  // and not inside the scope of a stage - otherwise they would not
+  // be accessible from other stages.
+  // Extract version and other properties from the pom.xml
+  def groupId    = getGroupIdFromPom("./nationalparks/pom.xml")
+  def artifactId = getArtifactIdFromPom("./nationalparks/pom.xml")
+  def version    = getVersionFromPom("./nationalparks/pom.xml")
+
+
+  // Set the tag for the development image: version + build number
+  def devTag  = "${version}-${BUILD_NUMBER}"
+  // Set the tag for the production image: version
+  def prodTag = "${version}"
+
+  // Using Maven build the war file
+  // Do not run tests in this step
+  stage('Build jar') {
+    echo "Building version ${version}"
+    dir('nationalparks') {
+       sh "mvn -s ../nexus_settings.xml clean package -Dmaven.test.skip=true"
+       echo "ls -al ./target"
+       sh "ls -al ./target"
+    }
+    
+  }
+
+  // Using Maven run the unit tests
+  stage('Unit Tests') {
+    echo "Running Unit Tests"
+    dir('nationalparks') {
+           sh "mvn -s ../nexus_settings.xml test"
+    }
+  }
+
+  // Using Maven call SonarQube for Code Analysis
+  stage('Code Analysis') {
+    echo "Running Code Analysis"
+    dir('nationalparks') {
+        sh "mvn -s ../nexus_settings.xml sonar:sonar -Dsonar.host.url=http://sonarqube-mitzicom-sonarqube.apps.na37.openshift.opentlc.com/ -Dsonar.projectName=${JOB_BASE_NAME}-${devTag}"
+    }
+  }
+
+  // Publish the built jar file to Nexus
+  stage('Publish to Nexus') {
+    echo "Publish to Nexus"
+      
+    dir('nationalparks') {
+        sh "mvn -s ../nexus_settings.xml deploy -DskipTests=true -DaltDeploymentRepository=nexus::default::http://nexus3.mitzicom-nexus.svc.cluster.local:8081/repository/maven-snapshots"
+    }
+  }
+
+  // Build the OpenShift Image in OpenShift and tag it.
+  stage('Start Binary Build and Tag OpenShift Image') {
+    echo "Building OpenShift container image nationalparks:${devTag} in mitzicom-tasks-dev"
+    
+    dir('nationalparks') {
+        // Start Binary Build in OpenShift using the file target jar
+        sh "oc start-build nationalparks --follow --from-file=./target/nationalparks.jar -n mitzicom-tasks-dev"
+    }
+    // Tag the image using the devTag
+    openshiftTag alias: 'false', destStream: 'nationalparks', destTag: devTag, destinationNamespace: 'mitzicom-tasks-dev', namespace: 'mitzicom-tasks-dev', srcStream: 'nationalparks', srcTag: 'latest', verbose: 'false'
+  }
+
+  // Deploy the built image to the Development Environment.
+  stage('Deploy to Dev') {
+    echo "Deploying container image to Development Project"
+      // Update the Image on the Development Deployment Config
+      sh "oc set image dc/nationalparks nationalparks=docker-registry.default.svc:5000/mitzicom-tasks-dev/nationalparks:${devTag} -n mitzicom-tasks-dev"
+    
+      // Deploy the development application.
+      openshiftDeploy depCfg: 'nationalparks', namespace: 'mitzicom-tasks-dev', verbose: 'false', waitTime: '', waitUnit: 'sec'
+      openshiftVerifyDeployment depCfg: 'nationalparks', namespace: 'mitzicom-tasks-dev', replicaCount: '1', verbose: 'false', verifyReplicaCount: 'false', waitTime: '', waitUnit: 'sec'
+      openshiftVerifyService namespace: 'mitzicom-tasks-dev', svcName: 'nationalparks', verbose: 'false'
+  }
+
+  // Run Integration Tests in the Development Environment.
+  stage('Integration Tests') {
+    echo "Running Integration Tests"
+    sh "curl http://nationalparks.mitzicom-tasks-dev.svc.cluster.local:8080/ws/healthz"
+    sh "curl http://nationalparks.mitzicom-tasks-dev.svc.cluster.local:8080/ws/info/"
+  }
+
+  // Copy Image to Nexus Docker Registry
+  stage('Copy Image to Nexus Docker Registry') {
+    echo "Copy image to Nexus Docker Registry"
+    sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds openshift:\$(oc whoami -t) --dest-creds admin:admin123 docker://docker-registry.default.svc.cluster.local:5000/mitzicom-tasks-dev/nationalparks:${devTag} docker://nexus-registry.mitzicom-nexus.svc.cluster.local:5000/nationalparks:${devTag}"
+  }
+}
+
+// Convenience Functions to read variables from the pom.xml
+// Do not change anything below this line.
+// --------------------------------------------------------
+def getVersionFromPom(pom) {
+  def matcher = readFile(pom) =~ '<version>(.+)</version>'
+  matcher ? matcher[0][1] : null
+}
+def getGroupIdFromPom(pom) {
+  def matcher = readFile(pom) =~ '<groupId>(.+)</groupId>'
+  matcher ? matcher[0][1] : null
+}
+def getArtifactIdFromPom(pom) {
+  def matcher = readFile(pom) =~ '<artifactId>(.+)</artifactId>'
+  matcher ? matcher[0][1] : null
+}

@@ -1,0 +1,110 @@
+#!groovy
+
+// Run this pipeline on the custom Maven Slave ('maven-custom-slavepod')
+// Maven Slaves have JDK and Maven already installed
+// 'maven-appdev' has skopeo installed as well.
+node('maven-custom-slavepod') {
+  // Checkout Source Code
+  stage('Checkout ParksMap Source(Gogs)') {
+    git credentialsId: '2b8f9c29-982e-46bb-9e15-80ab107ef284', url: 'http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git'
+    sh "ls -al"
+  }
+
+  // The following variables need to be defined at the top level
+  // and not inside the scope of a stage - otherwise they would not
+  // be accessible from other stages.
+  // Extract version and other properties from the pom.xml
+  def groupId    = getGroupIdFromPom("./mlbparks/pom.xml")
+  def artifactId = getArtifactIdFromPom("./mlbparks/pom.xml")
+  def version    = getVersionFromPom("./mlbparks/pom.xml")
+
+  // Set the tag for the development image: version + build number
+  def devTag  = "${version}-${BUILD_NUMBER}"
+  // Set the tag for the production image: version
+  def prodTag = "${version}"
+
+  // Using Maven build the war file
+  // Do not run tests in this step
+  stage('Build war') {
+    echo "Building version ${version}"
+    dir('mlbparks') {
+       sh "mvn -s ../nexus_settings.xml clean package -DskipTests=true"
+    }
+  }
+
+  // Using Maven run the unit tests
+  stage('Unit Tests') {
+    echo "Running Unit Tests"
+    dir('mlbparks') {
+        sh "mvn -s ../nexus_settings.xml test"
+    }
+  }
+
+  // Using Maven call SonarQube for Code Analysis
+  stage('Sonar Code Analysis') {
+    echo "Running Code Analysis"
+    dir('mlbparks') {
+        sh "mvn -s ../nexus_settings.xml sonar:sonar -Dsonar.host.url=http://sonarqube-mitzicom-sonarqube.apps.na37.openshift.opentlc.com/ -Dsonar.projectName=${JOB_BASE_NAME}-${devTag}"
+    }
+  }
+
+  // Publish the built war file to Nexus
+  stage('Publish to Nexus') {
+    echo "Publish to Nexus"
+      
+    dir('mlbparks') {
+        sh "mvn -s ../nexus_settings.xml deploy -DskipTests=true -DaltDeploymentRepository=nexus::default::http://nexus3.mitzicom-nexus.svc.cluster.local:8081/repository/releases"
+    }
+  }
+
+  // Build the OpenShift Image in OpenShift and tag it.
+  stage('Start Binary Build and Tag OpenShift Image') {
+    echo "Building OpenShift container image mlbparks:${devTag} in mitzicom-tasks-dev"
+    // Start Binary Build in OpenShift using the file we just published into Nexus:
+    sh "oc start-build mlbparks --follow --from-file=http://nexus3.mitzicom-nexus.svc.cluster.local:8081/repository/releases/com/openshift/evg/roadshow/mlbparks/1.0/mlbparks-${version}.war -n mitzicom-tasks-dev"
+
+    // Tag the image using the devTag
+    openshiftTag alias: 'false', destStream: 'mlbparks', destTag: devTag, destinationNamespace: 'mitzicom-tasks-dev', namespace: 'mitzicom-tasks-dev', srcStream: 'mlbparks', srcTag: 'latest', verbose: 'false'
+  }
+
+  // Deploy the built image to the Development Environment.
+  stage('Deploy to Dev') {
+    echo "Deploying container image to Development Project"
+      // Update the Image on the Development Deployment Config
+      sh "oc set image dc/mlbparks mlbparks=docker-registry.default.svc:5000/mitzicom-tasks-dev/mlbparks:${devTag} -n mitzicom-tasks-dev"
+    
+      // Deploy the development application.
+      openshiftDeploy depCfg: 'mlbparks', namespace: 'mitzicom-tasks-dev', verbose: 'false', waitTime: '', waitUnit: 'sec'
+      openshiftVerifyDeployment depCfg: 'mlbparks', namespace: 'mitzicom-tasks-dev', replicaCount: '1', verbose: 'false', verifyReplicaCount: 'false', waitTime: '', waitUnit: 'sec'
+      openshiftVerifyService namespace: 'mitzicom-tasks-dev', svcName: 'mlbparks', verbose: 'false'
+  }
+
+  // Run Integration Tests in the Development Environment.
+  stage('Integration Tests') {
+    echo "Running Integration Tests"
+    sh "curl http://mlbparks.mitzicom-tasks-dev.svc.cluster.local:8080/ws/healthz"
+    sh "curl http://mlbparks.mitzicom-tasks-dev.svc.cluster.local:8080/ws/info/"
+  }
+
+  // Copy Image to Nexus Docker Registry
+  stage('Copy Image to Nexus Docker Registry') {
+    echo "Copy image to Nexus Docker Registry"
+     sh "skopeo copy --src-tls-verify=false --dest-tls-verify=false --src-creds openshift:\$(oc whoami -t) --dest-creds admin:admin123 docker://docker-registry.default.svc.cluster.local:5000/mitzicom-tasks-dev/mlbparks:${devTag} docker://nexus-registry.mitzicom-nexus.svc.cluster.local:5000/mlbparks:${devTag}"
+  }
+}
+
+// Convenience Functions to read variables from the pom.xml
+// Do not change anything below this line.
+// --------------------------------------------------------
+def getVersionFromPom(pom) {
+  def matcher = readFile(pom) =~ '<version>(.+)</version>'
+  matcher ? matcher[0][1] : null
+}
+def getGroupIdFromPom(pom) {
+  def matcher = readFile(pom) =~ '<groupId>(.+)</groupId>'
+  matcher ? matcher[0][1] : null
+}
+def getArtifactIdFromPom(pom) {
+  def matcher = readFile(pom) =~ '<artifactId>(.+)</artifactId>'
+  matcher ? matcher[0][1] : null
+}

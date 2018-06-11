@@ -1,0 +1,197 @@
+apiVersion: v1
+kind: Template
+labels:
+  template: mitzicom-nexus3-persistent-template
+metadata:
+  name: mitzicom-nexus3-persistent
+  annotations:
+    description: Sonatype Nexus 3 persistent template
+    tags: ci,nexus
+objects:
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${SERVICE_NAME}
+    name: ${SERVICE_NAME}
+  spec:
+    tags:
+    - from:
+        kind: DockerImage
+        name: docker.io/sonatype/nexus3:latest
+      name: latest
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${SERVICE_NAME}
+    name: ${SERVICE_NAME}
+  spec:
+    replicas: 1
+    selector:
+      deploymentconfig: ${SERVICE_NAME}
+    strategy:
+      recreateParams:
+        timeoutSeconds: 600
+        post:
+          failurePolicy: Abort
+          execNewPod:
+            containerName: ${SERVICE_NAME}
+            command:
+              - "/bin/bash"
+              - "-c"
+              - "curl -o /tmp/setup_nexus3.sh -s https://raw.githubusercontent.com/wkulhanek/ocp_advanced_development_resources/master/nexus/setup_nexus3.sh;chmod +x /tmp/setup_nexus3.sh;./tmp/setup_nexus3.sh admin admin123 http://${SERVICE_NAME}:8081;rm ./tmp/setup_nexus3.sh"
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          app: ${SERVICE_NAME}
+          deploymentconfig: ${SERVICE_NAME}
+      spec:
+        containers:
+        - env:
+          - name: CONTEXT_PATH
+            value: /
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            exec:
+              command:
+              - echo
+              - ok
+            failureThreshold: 3
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: ${SERVICE_NAME}
+          ports:
+          - containerPort: 8081
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /repository/maven-public/
+              port: 8081
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${MAX_MEMORY}
+            requests:
+              memory: 1Gi
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /nexus-data
+            name: nexus3-volume-1
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: nexus3-volume-1
+          persistentVolumeClaim:
+            claimName: nexus-pvc
+    test: false
+    triggers:
+    - type: ConfigChange
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${SERVICE_NAME}
+        from:
+          kind: ImageStreamTag
+          name: ${SERVICE_NAME}:latest
+      type: ImageChange
+- kind: Service
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${SERVICE_NAME}
+    name: ${SERVICE_NAME}
+  spec:
+    ports:
+    - name: 8081-tcp
+      port: 8081
+      protocol: TCP
+      targetPort: 8081
+    selector:
+      deploymentconfig: ${SERVICE_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+- kind: Service
+  apiVersion: v1
+  metadata:
+    creationTimestamp: null
+    labels:
+      app: ${SERVICE_NAME}
+    name: nexus-registry
+  spec:
+    ports:
+    - port: 5000
+      protocol: TCP
+      targetPort: 5000
+    selector:
+      deploymentconfig: ${SERVICE_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}    
+- kind: Route
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${SERVICE_NAME}
+    name: ${HOSTNAME}
+  spec:
+    port:
+      targetPort: 8081-tcp
+    to:
+      kind: Service
+      name: ${SERVICE_NAME}
+      weight: 100
+- kind: Route
+  apiVersion: v1
+  metadata:
+    labels:
+      app: ${SERVICE_NAME}
+    name: nexus-registry
+  spec:
+    port:
+      targetPort: 5000
+    tls:
+      termination: edge
+    to:
+      kind: Service
+      name: nexus-registry
+      weight: 100     
+- kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+   name: nexus-pvc
+  spec:
+   accessModes:
+   - ReadWriteOnce
+   resources:
+    requests:
+      storage: ${VOLUME_CAPACITY}
+parameters:
+- description: 'Custom hostname for http service route.  Leave blank for default hostname, e.g.: <application-name>-<project>.<default-domain-suffix>'
+  name: HOSTNAME  
+- displayName: Sonatype Nexus service name
+  name: SERVICE_NAME
+  required: true
+  value: nexus3
+- description: Volume space available for Sonatype Nexus e.g. 512Mi, 2Gi
+  displayName: Volume Space for Nexus
+  name: VOLUME_CAPACITY
+  required: true
+  value: 4Gi
+- description: Max memory allocated to the Nexus pod
+  displayName: Max Memory
+  name: MAX_MEMORY
+  required: true
+  value: 2Gi
