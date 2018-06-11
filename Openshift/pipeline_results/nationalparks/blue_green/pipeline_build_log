@@ -1,0 +1,138 @@
+Started by user jkenny-redhat.com
+[Pipeline] node
+Still waiting to schedule task
+maven-custom-slavepod-1a41598cfd8be is offline
+Running on maven-custom-slavepod-1a41598cfd8be in /tmp/workspace/nationalParks_extended_bluegreen_pipeline
+[Pipeline] {
+[Pipeline] stage
+[Pipeline] { (Checkout ParksMap Source(Gogs))
+[Pipeline] git
+Cloning the remote Git repository
+Cloning repository http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git
+ > git init /tmp/workspace/nationalParks_extended_bluegreen_pipeline # timeout=10
+Fetching upstream changes from http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git
+ > git --version # timeout=10
+using GIT_ASKPASS to set credentials gogs access
+ > git fetch --tags --progress http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git +refs/heads/*:refs/remotes/origin/*
+ > git config remote.origin.url http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git # timeout=10
+ > git config --add remote.origin.fetch +refs/heads/*:refs/remotes/origin/* # timeout=10
+ > git config remote.origin.url http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git # timeout=10
+Fetching upstream changes from http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git
+using GIT_ASKPASS to set credentials gogs access
+ > git fetch --tags --progress http://gogs-jmk.apps.na37.openshift.opentlc.com/poc/ParksMap.git +refs/heads/*:refs/remotes/origin/*
+ > git rev-parse refs/remotes/origin/master^{commit} # timeout=10
+ > git rev-parse refs/remotes/origin/origin/master^{commit} # timeout=10
+Checking out Revision 5df188eabcccb11f817ab60e018c161545059b5c (refs/remotes/origin/master)
+ > git config core.sparsecheckout # timeout=10
+ > git checkout -f 5df188eabcccb11f817ab60e018c161545059b5c
+ > git branch -a -v --no-abbrev # timeout=10
+ > git checkout -b master 5df188eabcccb11f817ab60e018c161545059b5c
+First time build. Skipping changelog.
+[Pipeline] sh
+[nationalParks_extended_bluegreen_pipeline] Running shell script
++ ls -al
+total 16
+drwxr-sr-x. 6 default 1001650000  170 Jun 10 15:37 .
+drwxr-sr-x. 4 default 1001650000  108 Jun 10 15:37 ..
+drwxr-sr-x. 8 default 1001650000  162 Jun 10 15:37 .git
+-rw-r--r--. 1 default 1001650000 1422 Jun 10 15:37 .gitignore
+-rw-r--r--. 1 default 1001650000  616 Jun 10 15:37 README.adoc
+drwxr-sr-x. 3 default 1001650000   85 Jun 10 15:37 mlbparks
+drwxr-sr-x. 3 default 1001650000   85 Jun 10 15:37 nationalparks
+-rw-r--r--. 1 default 1001650000  471 Jun 10 15:37 nexus_settings.xml
+-rw-r--r--. 1 default 1001650000  471 Jun 10 15:37 nexus_settings_openshift.xml
+drwxr-sr-x. 3 default 1001650000   85 Jun 10 15:37 parksmap
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] readFile
+[Pipeline] stage
+[Pipeline] { (Tag nationalParks Dev Image with production tag)
+[Pipeline] openshiftTag
+
+
+Starting "Tag OpenShift Image" with the source [image stream:tag] "nationalparks:1.4.0.RELEASE-1" from the project "mitzicom-tasks-dev" and destination stream(s) "nationalparks" with tag(s) "1.4.0.RELEASE" from the project "mitzicom-tasks-dev".
+
+
+Exiting "Tag OpenShift Image" successfully.
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Blue/Green Production Deployment)
+[Pipeline] echo
+Active Application:      nationalparks-blue
+[Pipeline] echo
+Destination Application: nationalparks-blue
+[Pipeline] sh
+[nationalParks_extended_bluegreen_pipeline] Running shell script
++ oc set image dc/nationalparks-blue nationalparks-blue=docker-registry.default.svc:5000/mitzicom-tasks-dev/nationalparks:1.4.0.RELEASE -n mitzicom-tasks-prod
+[Pipeline] openshiftDeploy
+
+
+Starting "Trigger OpenShift Deployment" with deployment config "nationalparks-blue" from the project "mitzicom-tasks-prod".
+Operation will timeout after 600000 milliseconds
+
+
+Exiting "Trigger OpenShift Deployment" successfully; deployment "nationalparks-blue-5" has completed with status:  [Complete].
+[Pipeline] openshiftVerifyDeployment
+
+
+Starting "Verify OpenShift Deployment" with deployment config "nationalparks-blue" from the project "mitzicom-tasks-prod".
+  Waiting on the latest deployment for "nationalparks-blue" to complete and scale to "1" replica(s) ...
+Operation will timeout after 180000 milliseconds
+
+
+Exiting "Verify OpenShift Deployment" successfully; deployment "nationalparks-blue-5" has completed with status:  [Complete].  The deployment reached "1" replica(s).
+[Pipeline] openshiftVerifyService
+
+
+Starting "Verify OpenShift Service" for the service "nationalparks-blue" from the project "mitzicom-tasks-prod".
+  Attempting to connect to "172.30.135.220:8080" ...
+
+
+Exiting "Verify OpenShift Service" successfully; a connection to "172.30.135.220:8080" was made.
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Switch over to new Green Version)
+[Pipeline] input
+Switch Production to Green application?
+Proceed or Abort
+Approved by jkenny-redhat.com
+[Pipeline] sh
+[nationalParks_extended_bluegreen_pipeline] Running shell script
++ oc set image dc/nationalparks-green nationalparks-green=docker-registry.default.svc:5000/mitzicom-tasks-dev/nationalparks:1.4.0.RELEASE -n mitzicom-tasks-prod
+[Pipeline] openshiftDeploy
+
+
+Starting "Trigger OpenShift Deployment" with deployment config "nationalparks-green" from the project "mitzicom-tasks-prod".
+Operation will timeout after 600000 milliseconds
+
+Exiting "Trigger OpenShift Deployment" successfully; deployment "nationalparks-green-2" has completed with status:  [Complete].
+[Pipeline] openshiftVerifyDeployment
+
+
+Starting "Verify OpenShift Deployment" with deployment config "nationalparks-green" from the project "mitzicom-tasks-prod".
+  Waiting on the latest deployment for "nationalparks-green" to complete and scale to "1" replica(s) ...
+Operation will timeout after 180000 milliseconds
+
+
+Exiting "Verify OpenShift Deployment" successfully; deployment "nationalparks-green-2" has completed with status:  [Complete].  The deployment reached "1" replica(s).
+[Pipeline] openshiftVerifyService
+
+
+Starting "Verify OpenShift Service" for the service "nationalparks-green" from the project "mitzicom-tasks-prod".
+  Attempting to connect to "172.30.111.205:8080" ...
+
+Exiting "Verify OpenShift Service" successfully; a connection to "172.30.111.205:8080" was made.
+[Pipeline] echo
+Switching Production application to nationalparks-green.
+[Pipeline] sh
+[nationalParks_extended_bluegreen_pipeline] Running shell script
++ oc patch route nationalparks-blue -n mitzicom-tasks-prod -p '{"spec":{"to":{"name":"nationalparks-green"}}}'
+route "nationalparks-blue" patched
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] }
+[Pipeline] // node
+[Pipeline] End of Pipeline
+Finished: SUCCESS
