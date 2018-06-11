@@ -247,7 +247,7 @@ _$ git push -u gogsPoc master_
 
 note: Make sure to replace <gogs\_user> and <gogs\_password> with your credentials
 
-## 4.3 SonarQube setup
+## 3.3 SonarQube setup
 
 Setup up SonarQube (code analysis) with persistent storage from a template.
 
@@ -411,7 +411,7 @@ This will create a jar file target/parksmap.jar that can be used in a binary bui
 
 As part of this verification you need to confirm the output of the build to verify that the local Maven dependencies come from Nexus and not the public Internet repository. Post the build step, check Nexus maven-all-public to confirm dependencies have been added.
 
-# 5.0        OpenShift Setup
+# 4.0        OpenShift Setup
 
 The next part of the POC invloves creating two Openshift projects for development and production, these projects will be the runtime for the output of a successful pipeline build. Both projects will have MongoDB persistence, with the addition of a stateful set for production with three replicas.
 
@@ -937,7 +937,7 @@ _$ oc expose dc parksmap-green --port 8080 -n mitzicom-tasks-prod_
 
 
 
-# 4.0        Development Pipeline
+# 5.0        Development Pipeline
 
 The development pipleline performs the following stages:
 
@@ -1001,7 +1001,7 @@ The Unit tests / Coverage tests / Integration test results are available in the 
 SonarQube was able to apply code analysis on the build artifact:
 
 The tested container was successfully uploaded to the Nexus Docker repository:
-# 5.0        Deployment Pipeline
+# 6.0        Deployment Pipeline
 
 The Deployment Pipeline included the following additions:
 
